@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate log;
 
-use gfx_hal::{device, window, Instance};
+use gfx_hal::{device, prelude::*, queue, window, Instance};
 
 const DIMS: window::Extent2D = window::Extent2D {
     width: 1024,
@@ -41,6 +41,7 @@ fn main() {
                 }
                 _ => {}
             },
+            winit::event::Event::MainEventsCleared => window.window.request_redraw(),
             winit::event::Event::RedrawRequested(_) => {
                 // TODO: Render
             }
@@ -74,8 +75,6 @@ impl Window {
     }
 }
 
-
-
 pub struct Renderer<B: gfx_hal::Backend> {
     instance: B::Instance,
     adapter: gfx_hal::adapter::Adapter<B>,
@@ -88,7 +87,7 @@ where
     B: gfx_hal::Backend,
 {
     // FIXME: winit vs raw window handle
-    pub fn new(window: &winit::window::Window) -> Self {
+    pub fn new(window: &winit::window::Window) -> Renderer<B> {
         let (instance, mut adapters, surface) = {
             let instance =
                 backend::Instance::create("triangle", 1).expect("Could not create instance");
@@ -103,7 +102,29 @@ where
         };
 
         let adapter = adapters.remove(0);
+
+        // NOTE: ??
         let memory_types = adapter.physical_device.memory_properties().memory_types;
         let limits = adapter.physical_device.limits();
+
+        let (device, mut queue_group) = {
+            // Get graphics queue only
+            let queue_family = adapter
+                .queue_families
+                .iter()
+                .find(|family| {
+                    surface.supports_queue_family(family) && family.queue_type().supports_graphics()
+                })
+                .unwrap();
+
+            let mut gpu = unsafe {
+                adapter
+                    .physical_device
+                    .open(&[(queue_family, &[1.0])], gfx_hal::Features::empty())
+                    .unwrap()
+            };
+
+            (gpu.device, gpu.queue_groups.pop().unwrap())
+        };
     }
 }
