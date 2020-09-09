@@ -375,6 +375,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gfx-backend-empty"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2085227c12b78f6657a900c829f2d0deb46a9be3eaf86844fde263cdc218f77c"
+dependencies = [
+ "gfx-hal",
+ "log",
+ "raw-window-handle",
+]
+
+[[package]]
 name = "gfx-backend-metal"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -438,6 +449,7 @@ dependencies = [
  "env_logger",
  "gfx-auxil",
  "gfx-backend-dx12",
+ "gfx-backend-empty",
  "gfx-backend-metal",
  "gfx-backend-vulkan",
  "gfx-hal",

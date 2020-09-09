@@ -1,6 +1,20 @@
 #[macro_use]
 extern crate log;
 
+#[cfg(not(any(
+    feature = "vulkan",
+    feature = "dx12",
+    feature = "metal",
+)))]
+extern crate gfx_backend_empty as back;
+
+#[cfg(feature = "dx12")]
+extern crate gfx_backend_dx12 as backend;
+#[cfg(feature = "metal")]
+extern crate gfx_backend_metal as backend;
+#[cfg(feature = "vulkan")]
+extern crate gfx_backend_vulkan as backend;
+
 use gfx_hal::{device, prelude::*, queue, window, Instance};
 
 const DIMS: window::Extent2D = window::Extent2D {
@@ -90,7 +104,7 @@ where
     pub fn new(window: &winit::window::Window) -> Renderer<B> {
         let (instance, mut adapters, surface) = {
             let instance =
-                backend::Instance::create("triangle", 1).expect("Could not create instance");
+                B::Instance::create("triangle", 1).expect("Could not create instance");
             let adapters = instance.enumerate_adapters();
             let surface = unsafe {
                 instance
@@ -126,5 +140,12 @@ where
 
             (gpu.device, gpu.queue_groups.pop().unwrap())
         };
+
+        Renderer {
+            instance,
+            adapter,
+            device,
+            surface,
+        }
     }
 }
