@@ -2,7 +2,7 @@
 extern crate log;
 
 #[cfg(not(any(feature = "vulkan", feature = "dx12", feature = "metal",)))]
-extern crate gfx_backend_empty as back;
+extern crate gfx_backend_empty as backend;
 
 #[cfg(feature = "dx12")]
 extern crate gfx_backend_dx12 as backend;
@@ -59,6 +59,8 @@ fn main() {
         .build(&event_loop)
         .unwrap();
 
+   let mut renderer: Renderer<backend::Backend> = Renderer::new(&window);
+
     info!("Starting event loop");
 
     // TODO: Some sort of main loop struct instead of just windowing info??
@@ -89,7 +91,7 @@ fn main() {
             },
             winit::event::Event::MainEventsCleared => window.request_redraw(),
             winit::event::Event::RedrawRequested(_) => {
-                // TODO: Render
+                renderer.render();
             }
             _ => {}
         }
@@ -312,4 +314,6 @@ where
             rendering_complete_semaphores: vec![rendering_complete_semaphore],
         }
     }
+
+    pub fn render(&mut self) {}
 }
