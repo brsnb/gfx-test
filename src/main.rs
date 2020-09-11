@@ -59,7 +59,7 @@ fn main() {
         .build(&event_loop)
         .unwrap();
 
-   let mut renderer: Renderer<backend::Backend> = Renderer::new(&window);
+    let mut renderer: Renderer<backend::Backend> = Renderer::new(&window);
 
     info!("Starting event loop");
 
@@ -103,12 +103,15 @@ pub struct Renderer<B: gfx_hal::Backend> {
     adapter: ManuallyDrop<gfx_hal::adapter::Adapter<B>>,
     device: B::Device,
     surface: ManuallyDrop<B::Surface>,
-    render_passes: ManuallyDrop<Vec<B::RenderPass>>,
-    pipeline_layouts: ManuallyDrop<Vec<B::PipelineLayout>>,
-    pipelines: ManuallyDrop<Vec<B::GraphicsPipeline>>,
-    command_pools: ManuallyDrop<Vec<B::CommandPool>>,
+    render_passes: Vec<B::RenderPass>,
+    pipeline_layouts: Vec<B::PipelineLayout>,
+    pipelines: Vec<B::GraphicsPipeline>,
+    command_pools: Vec<B::CommandPool>,
+    command_buffers: Vec<B::CommandBuffer>,
     submission_complete_fences: Vec<B::Fence>,
     rendering_complete_semaphores: Vec<B::Semaphore>,
+    surface_color_format: format::Format,
+    surface_extent: window::Extent2D,
 }
 
 impl<B> Renderer<B>
@@ -155,7 +158,8 @@ where
             (gpu.device, gpu.queue_groups.pop().unwrap())
         };
 
-        let (command_pool, mut command_buffer) = unsafe {
+        // TODO: Allocate command_buffer for each frame
+        let (command_pool, command_buffer) = unsafe {
             let mut command_pool = device
                 .create_command_pool(queue_group.family, pool::CommandPoolCreateFlags::empty())
                 .expect("Out of memory");
@@ -199,7 +203,11 @@ where
                 preserves: &[],
             };
 
-                unsafe { device.create_render_pass(&[color_attachment], &[subpass], &[]).unwrap() }
+            unsafe {
+                device
+                    .create_render_pass(&[color_attachment], &[subpass], &[])
+                    .unwrap()
+            }
         };
 
         let pipeline_layout = unsafe {
@@ -306,14 +314,75 @@ where
             adapter: ManuallyDrop::new(adapter),
             device,
             surface: ManuallyDrop::new(surface),
-            render_passes: ManuallyDrop::new(vec![render_pass]),
-            pipeline_layouts: ManuallyDrop::new(vec![pipeline_layout]),
-            pipelines: ManuallyDrop::new(vec![pipeline]),
-            command_pools: ManuallyDrop::new(vec![command_pool]),
+            render_passes: vec![render_pass],
+            pipeline_layouts: vec![pipeline_layout],
+            pipelines: vec![pipeline],
+            command_pools: vec![command_pool],
+            command_buffers: vec![command_buffer],
             submission_complete_fences: vec![submission_complete_fence],
             rendering_complete_semaphores: vec![rendering_complete_semaphore],
+            surface_color_format,
+            surface_extent: DIMS,
         }
     }
 
-    pub fn render(&mut self) {}
+    pub fn recreate_swapchain(&mut self) {
+        let caps = self.surface.capabilities(&self.adapter.physical_device);
+
+        let mut swapchain_config = window::SwapchainConfig::from_caps(&caps, self.surface_color_format, self.surface_extent);
+        info!("{:?}", swapchain_config);
+        if caps.image_count.contains(&3) {
+            swapchain_config.image_count = 3;
+        }
+
+        let extent = swapchain_config.extent.to_extent();
+
+        unsafe {
+            self.surface.configure_swapchain(&self.device, swapchain_config).unwrap();
+        }
+    }
+
+    pub fn render(&mut self) {
+        unsafe {
+            let render_timeout = 1_000_000_000;
+            let fence = &self.submission_complete_fences[0];
+            self.device.wait_for_fence(fence, render_timeout).unwrap();
+            self.device.reset_fence(fence).unwrap();
+            self.command_pools[0].reset(false);
+        }
+    }
+}
+
+impl<B> Drop for Renderer<B>
+where
+    B: gfx_hal::Backend,
+{
+    fn drop(&mut self) {
+        self.device.wait_idle().unwrap();
+        unsafe {
+            for s in self.rendering_complete_semaphores.drain(..) {
+                self.device.destroy_semaphore(s);
+            }
+
+            for f in self.submission_complete_fences.drain(..) {
+                self.device.destroy_fence(f);
+            }
+
+            for pool in self.command_pools.drain(..) {
+                self.device.destroy_command_pool(pool);
+            }
+
+            for p in self.pipelines.drain(..) {
+                self.device.destroy_graphics_pipeline(p);
+            }
+
+            for rp in self.render_passes.drain(..) {
+                self.device.destroy_render_pass(rp);
+            }
+
+            self.surface.unconfigure_swapchain(&self.device);
+            self.instance
+                .destroy_surface(ManuallyDrop::take(&mut self.surface));
+        }
+    }
 }
