@@ -14,10 +14,10 @@ extern crate gfx_backend_vulkan as backend;
 extern crate shaderc;
 
 use gfx_hal::{
-    buffer, command, device, format, image, pass, pool, prelude::*, queue, window, Instance,
+    buffer, command, device, format, image, pass, pool, prelude::*, pso, queue, window, Instance,
 };
 
-use std::mem::ManuallyDrop;
+use std::{io::Cursor, mem::ManuallyDrop};
 
 const DIMS: window::Extent2D = window::Extent2D {
     width: 1024,
@@ -100,7 +100,13 @@ pub struct Renderer<B: gfx_hal::Backend> {
     instance: B::Instance,
     adapter: ManuallyDrop<gfx_hal::adapter::Adapter<B>>,
     device: B::Device,
-    surface: B::Surface,
+    surface: ManuallyDrop<B::Surface>,
+    render_passes: ManuallyDrop<Vec<B::RenderPass>>,
+    pipeline_layouts: ManuallyDrop<Vec<B::PipelineLayout>>,
+    pipelines: ManuallyDrop<Vec<B::GraphicsPipeline>>,
+    command_pools: ManuallyDrop<Vec<B::CommandPool>>,
+    submission_complete_fences: Vec<B::Fence>,
+    rendering_complete_semaphores: Vec<B::Semaphore>,
 }
 
 impl<B> Renderer<B>
@@ -191,10 +197,7 @@ where
                 preserves: &[],
             };
 
-            ManuallyDrop::new(
-                unsafe { device.create_render_pass(&[color_attachment], &[subpass], &[]) }
-                    .expect("Could not create render pass"),
-            )
+                unsafe { device.create_render_pass(&[color_attachment], &[subpass], &[]).unwrap() }
         };
 
         let pipeline_layout = unsafe {
@@ -230,14 +233,83 @@ where
         };
 
         let pipeline = {
-            let vs_module = device.c
-        }
+            let vs_module = {
+                let spirv = gfx_auxil::read_spirv(Cursor::new(vs_spirv.as_binary_u8())).unwrap();
+                unsafe { device.create_shader_module(&spirv).unwrap() }
+            };
+            let fs_module = {
+                let spirv = gfx_auxil::read_spirv(Cursor::new(fs_spirv.as_binary_u8())).unwrap();
+                unsafe { device.create_shader_module(&spirv).unwrap() }
+            };
+
+            let pipeline = {
+                let (vs_entry, fs_entry): (pso::EntryPoint<B>, pso::EntryPoint<B>) = (
+                    pso::EntryPoint {
+                        entry: "main",
+                        module: &vs_module,
+                        specialization: pso::Specialization::default(),
+                    },
+                    pso::EntryPoint {
+                        entry: "main",
+                        module: &fs_module,
+                        specialization: pso::Specialization::default(),
+                    },
+                );
+                let mut pipline_desc = pso::GraphicsPipelineDesc::new(
+                    pso::PrimitiveAssemblerDesc::Vertex {
+                        buffers: &[],
+                        attributes: &[],
+                        input_assembler: pso::InputAssemblerDesc {
+                            primitive: pso::Primitive::TriangleList,
+                            with_adjacency: false,
+                            restart_index: None,
+                        },
+                        vertex: vs_entry,
+                        geometry: None,
+                        tessellation: None,
+                    },
+                    pso::Rasterizer::FILL,
+                    Some(fs_entry),
+                    &pipeline_layout,
+                    pass::Subpass {
+                        index: 0,
+                        main_pass: &render_pass,
+                    },
+                );
+
+                pipline_desc.blender.targets.push(pso::ColorBlendDesc {
+                    mask: pso::ColorMask::ALL,
+                    blend: Some(pso::BlendState::ALPHA),
+                });
+
+                unsafe { device.create_graphics_pipeline(&pipline_desc, None) }
+            };
+
+            // TODO: Move shader stuff into its own module ??
+            unsafe {
+                device.destroy_shader_module(vs_module);
+            }
+            unsafe {
+                device.destroy_shader_module(fs_module);
+            }
+
+            pipeline.unwrap()
+        };
+
+        let submission_complete_fence = device.create_fence(true).unwrap();
+        let rendering_complete_semaphore = device.create_semaphore().unwrap();
 
         Renderer {
             instance,
             adapter: ManuallyDrop::new(adapter),
             device,
-            surface,
+            surface: ManuallyDrop::new(surface),
+            render_passes: ManuallyDrop::new(vec![render_pass]),
+            pipeline_layouts: ManuallyDrop::new(vec![pipeline_layout]),
+            pipelines: ManuallyDrop::new(vec![pipeline]),
+            command_pools: ManuallyDrop::new(vec![command_pool]),
+            submission_complete_fences: vec![submission_complete_fence],
+            rendering_complete_semaphores: vec![rendering_complete_semaphore],
         }
     }
 }
