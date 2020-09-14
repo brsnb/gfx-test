@@ -17,7 +17,7 @@ use gfx_hal::{
     buffer, command, device, format, image, pass, pool, prelude::*, pso, queue, window, Instance,
 };
 
-use std::{io::Cursor, mem::ManuallyDrop};
+use std::{borrow::Borrow, io::Cursor, iter, mem::ManuallyDrop};
 
 const DIMS: window::Extent2D = window::Extent2D {
     width: 1024,
@@ -111,7 +111,7 @@ pub struct Renderer<B: gfx_hal::Backend> {
     submission_complete_fences: Vec<B::Fence>,
     rendering_complete_semaphores: Vec<B::Semaphore>,
     surface_color_format: format::Format,
-    surface_extent: window::Extent2D,
+    viewport: pso::Viewport,
 }
 
 impl<B> Renderer<B>
@@ -309,6 +309,37 @@ where
         let submission_complete_fence = device.create_fence(true).unwrap();
         let rendering_complete_semaphore = device.create_semaphore().unwrap();
 
+        // FIXME: Duplication b/t this and recreate_swapchain
+        let caps = surface.capabilities(&adapter.physical_device);
+        let formats = surface.supported_formats(&adapter.physical_device);
+        info!("formats: {:?}", formats);
+        let format = formats.map_or(format::Format::Rgba8Srgb, |formats| {
+            formats
+                .iter()
+                .find(|format| format.base_format().1 == format::ChannelType::Srgb)
+                .map(|format| *format)
+                .unwrap_or(formats[0])
+        });
+
+        let swap_config = window::SwapchainConfig::from_caps(&caps, format, DIMS);
+        info!("{:?}", swap_config);
+        let extent = swap_config.extent;
+        unsafe {
+            surface
+                .configure_swapchain(&device, swap_config)
+                .expect("Can't configure swapchain");
+        };
+
+        let viewport = pso::Viewport {
+            rect: pso::Rect {
+                x: 0,
+                y: 0,
+                w: extent.width as _,
+                h: extent.height as _,
+            },
+            depth: 0.0..1.0,
+        };
+
         Renderer {
             instance,
             adapter: ManuallyDrop::new(adapter),
@@ -322,23 +353,30 @@ where
             submission_complete_fences: vec![submission_complete_fence],
             rendering_complete_semaphores: vec![rendering_complete_semaphore],
             surface_color_format,
-            surface_extent: DIMS,
+            viewport,
         }
     }
 
     pub fn recreate_swapchain(&mut self) {
         let caps = self.surface.capabilities(&self.adapter.physical_device);
-
-        let mut swapchain_config = window::SwapchainConfig::from_caps(&caps, self.surface_color_format, self.surface_extent);
+        let mut swapchain_config = window::SwapchainConfig::from_caps(
+            &caps,
+            self.surface_color_format,
+            self.dims,
+        );
         info!("{:?}", swapchain_config);
         if caps.image_count.contains(&3) {
             swapchain_config.image_count = 3;
         }
 
         let extent = swapchain_config.extent.to_extent();
+        self.viewport.rect.w = extent.width as _;
+        self.viewport.rect.h = extent.height as _;
 
         unsafe {
-            self.surface.configure_swapchain(&self.device, swapchain_config).unwrap();
+            self.surface
+                .configure_swapchain(&self.device, swapchain_config)
+                .unwrap();
         }
     }
 
@@ -350,6 +388,30 @@ where
             self.device.reset_fence(fence).unwrap();
             self.command_pools[0].reset(false);
         }
+
+        let surface_image = unsafe {
+            let acquire_timeout = 1_000_000_000;
+            match self.surface.acquire_image(acquire_timeout) {
+                Ok((image, _)) => image,
+                Err(_) => {
+                    self.recreate_swapchain();
+                    return;
+                }
+            }
+        };
+
+        let framebuffer = unsafe {
+            self.device.create_framebuffer(
+                &self.render_passes[0],
+                iter::once(surface_image.borrow()),
+                image::Extent {
+                    width: self.surface_extent.width,
+                    height: self.surface_extent.height,
+                    depth: 1,
+                },
+            )
+            .unwrap()
+        };
     }
 }
 
