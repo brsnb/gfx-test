@@ -14,10 +14,12 @@ vulkan = ["gfx-backend-vulkan"]
 unstable = []
 
 [dependencies]
-log = "0.4"
+bincode = "1.3"
 env_logger = "0.7"
+log = "0.4"
 gfx-auxil = "0.5"
 gfx-hal = "0.6"
+serde = {version = "1.0", features = ["derive"]}
 shaderc = "0.6"
 winit = "0.22"
 gfx-backend-empty = "0.6.0"
@@ -32,7 +34,7 @@ package = "gfx-backend-dx12"
 version = "0.6"
 optional = true
 
-[dependencies.gfx-backend-vulkan]
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies.gfx-backend-vulkan]
 package = "gfx-backend-vulkan"
 version = "0.6"
 features = ["x11"]
